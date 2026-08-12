@@ -4,6 +4,7 @@ import numpy as np
 import joblib
 import shap
 import json
+import altair as alt
 from features import engineer_features
 
 # Load the calibrated model (this is the one we use for real decisions)
@@ -68,6 +69,49 @@ if submitted:
     probability = model.predict_proba(features)[0][1]
     threshold = metadata["cost_based_threshold_analysis"]["primary_recommendation"]["optimal_threshold"]
     decision = "DENY" if probability >= threshold else "APPROVE"
+    explainer = shap.TreeExplainer(raw_model)
+    shap_values = explainer.shap_values(features)
+
+    shap_df = pd.DataFrame({
+        "Feature": features.columns,
+        "Value": features.iloc[0].values,
+        "SHAP Impact": shap_values[0]
+    })
+    shap_df["Abs Impact"] = shap_df["SHAP Impact"].abs()
+    shap_df = shap_df.sort_values("Abs Impact", ascending=False).drop(columns="Abs Impact")
+
+    st.subheader("What drove this prediction")
+    st.write("Positive SHAP impact = pushes toward higher risk. Negative = pushes toward lower risk.")
+    st.dataframe(shap_df.head(10), hide_index=True)
+
+    chart_df = shap_df.head(10).copy()
+    chart_df["Direction"] = chart_df["SHAP Impact"].apply(lambda x: "Increases Risk" if x > 0 else "Decreases Risk")
+
+    chart = alt.Chart(chart_df).mark_bar().encode(
+        x=alt.X("SHAP Impact:Q", title="SHAP Impact on Risk"),
+        y=alt.Y("Feature:N", sort="-x", title=None),
+        color=alt.Color(
+            "Direction:N",
+            scale=alt.Scale(domain=["Increases Risk", "Decreases Risk"], range=["#d62728", "#1f77b4"]),
+            legend=alt.Legend(title=None)
+        ),
+        tooltip=["Feature", "Value", "SHAP Impact"]
+    ).properties(height=350)
+
+    st.altair_chart(chart, use_container_width=True)
+
+
+    top_feature = shap_df.iloc[0]
+    top_direction = "increased" if top_feature["SHAP Impact"] > 0 else "decreased"
+    second_feature = shap_df.iloc[1]
+    second_direction = "increased" if second_feature["SHAP Impact"] > 0 else "decreased"
+
+    st.info(
+        f"**In plain terms:** This applicant's risk was mainly {top_direction} by "
+        f"**{top_feature['Feature']}** (value: {top_feature['Value']:.2f}), "
+        f"and further {second_direction} by **{second_feature['Feature']}** "
+        f"(value: {second_feature['Value']:.2f})."
+    )
 
     st.divider()
     st.subheader("Result")
